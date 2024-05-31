@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.23;
 
-// import {VizingOmni} from "@vizing/contracts/VizingOmni.sol";
-import {VizingOmni} from "../../VizingOmni.sol";
+import {VizingOmni} from "@vizing/contracts/VizingOmni.sol";
 import {MessageTypeLib} from "@vizing/contracts/library/MessageTypeLib.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -27,16 +26,29 @@ contract TokenExchanger is Ownable, VizingOmni {
         // In a production environment, developers need to call LaunchPad.estimateGas to fetch VizingGasfee.
         uint256 amountIn = uint256(msg.value / 2);
 
-        uint256 amountOut = exactInput(destinationChainId, amountIn);
+        uint256 amountOut = _exactInput(destinationChainId, amountIn);
 
         bytes memory messageEncoded = abi.encode(tokenReceiver, amountOut);
 
-        _simpleLaunch(
-            destinationChainId,
-            mirrorExchanger[destinationChainId],
-            amountOut,
+        address targetContract = mirrorExchanger[destinationChainId];
+
+        bytes memory metadata = _packetMessage(
+            bytes1(0x01), // STANDARD_ACTIVATE
+            targetContract,
             GAS_LIMIT,
+            _fetchPrice(targetContract, destinationChainId),
             messageEncoded
+        );
+
+        LaunchPad.Launch{value: msg.value}(
+            0,
+            0,
+            address(0),
+            msg.sender,
+            amountOut,
+            destinationChainId,
+            new bytes(0),
+            metadata
         );
     }
 
@@ -45,18 +57,31 @@ contract TokenExchanger is Ownable, VizingOmni {
         address tokenReceiver,
         uint256 amountOut
     ) external payable {
-        uint256 amountIn = exactOutput(destinationChainId, amountOut);
+        uint256 amountIn = _exactOutput(destinationChainId, amountOut);
 
         require(msg.value > amountIn, "Invalid amount");
 
         bytes memory messageEncoded = abi.encode(tokenReceiver, amountOut);
 
-        _simpleLaunch(
-            destinationChainId,
-            mirrorExchanger[destinationChainId],
-            amountOut,
+        address targetContract = mirrorExchanger[destinationChainId];
+
+        bytes memory metadata = _packetMessage(
+            bytes1(0x01), // STANDARD_ACTIVATE
+            targetContract,
             GAS_LIMIT,
+            _fetchPrice(targetContract, destinationChainId),
             messageEncoded
+        );
+
+        LaunchPad.Launch{value: msg.value}(
+            0,
+            0,
+            address(0),
+            msg.sender,
+            amountOut,
+            destinationChainId,
+            new bytes(0),
+            metadata
         );
     }
 
@@ -85,5 +110,19 @@ contract TokenExchanger is Ownable, VizingOmni {
         for (uint256 i = 0; i < chainIds.length; i++) {
             mirrorExchanger[chainIds[i]] = exchangers[i];
         }
+    }
+
+    function exactInput(
+        uint64 destChainid,
+        uint256 amountIn
+    ) external view returns (uint256 amountOut) {
+        return _exactInput(destChainid, amountIn);
+    }
+
+    function exactOutput(
+        uint64 destChainid,
+        uint256 amountOut
+    ) external view returns (uint256 amountIn) {
+        return _exactOutput(destChainid, amountOut);
     }
 }

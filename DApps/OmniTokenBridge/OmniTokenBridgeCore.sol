@@ -75,7 +75,7 @@ abstract contract OmniTokenBridgeCore is IOminiTokenBridge, VizingOmni {
         bytes calldata permitData,
         bytes calldata companionMessage
     ) public payable virtual override {
-        (, bytes memory encodeMessage) = fetchBridgeAssetDetails(
+        (, bytes memory metadata) = fetchBridgeAssetDetails(
             destinationChainId,
             tokenReceiver,
             amount,
@@ -83,23 +83,33 @@ abstract contract OmniTokenBridgeCore is IOminiTokenBridge, VizingOmni {
             companionMessage
         );
 
-        _bridgeAssetHandlingStrategy(
-            destinationChainId,
-            tokenReceiver,
-            amount,
-            token,
-            permitData
-        );
+        {
+            _bridgeAssetHandlingStrategy(
+                destinationChainId,
+                tokenReceiver,
+                amount,
+                token,
+                permitData
+            );
+        }
+        this.Launch{value: msg.value}(msg.sender, destinationChainId, metadata);
+    }
 
-        emit2LaunchPad(
+    function Launch(
+        address sender,
+        uint64 destinationChainId,
+        bytes calldata metadata
+    ) public payable {
+        require(msg.sender == address(this), "invalid sender");
+        LaunchPad.Launch{value: msg.value}(
             0,
             0,
             address(0),
-            msg.sender,
+            sender,
             0,
             destinationChainId,
             new bytes(0),
-            encodeMessage
+            metadata
         );
     }
 
@@ -170,7 +180,7 @@ abstract contract OmniTokenBridgeCore is IOminiTokenBridge, VizingOmni {
             );
             address targetContract = mirrorBridge[destinationChainId];
             uint64 price = _fetchPrice(targetContract, destinationChainId);
-            encodedMessage = PacketMessage(
+            encodedMessage = _packetMessage(
                 BRIDGE_SEND_MODE, // STANDARD_ACTIVATE
                 targetContract,
                 _fetchGasLimit(),
@@ -285,7 +295,7 @@ abstract contract OmniTokenBridgeCore is IOminiTokenBridge, VizingOmni {
             revert InvalidAddress();
         }
         uint64 price = _fetchPrice(targetContract, destinationChainId);
-        unLockMessage = PacketMessage(
+        unLockMessage = _packetMessage(
             BRIDGE_SEND_MODE,
             targetContract,
             _fetchGasLimit(),

@@ -60,6 +60,10 @@ interface IVizingGasSystem {
         uint128[] calldata denominator
     ) external;
 
+    function getTokenFeeConfig(
+        uint64 chainid
+    ) external view returns (NativeTokenTradeFeeConfig memory);
+
     function batchSetTradeFeeConfigMap(
         uint64[] calldata destChainid,
         address[] calldata dApps,
@@ -70,10 +74,6 @@ interface IVizingGasSystem {
     function getTradeFeeConfigMap(
         uint64 chainid,
         address dApp
-    ) external view returns (NativeTokenTradeFeeConfig memory);
-
-    function getTokenFeeConfig(
-        uint64 chainid
     ) external view returns (NativeTokenTradeFeeConfig memory);
 
     function getDAppConfigMap(

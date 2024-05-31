@@ -25,7 +25,7 @@ abstract contract OmniERC20Core is ERC20, VizingOmni, IOmniERC20Core {
         _burn(msg.sender, amount);
         address targetContract = omniERC20s[destinationChainId];
         bytes memory signature = fetchTransferSignature(tokenReceiver, amount);
-        bytes memory packedMessage = PacketMessage(
+        bytes memory metadata = _packetMessage(
             bytes1(0x02), // ARBITRARY_ACTIVATE
             targetContract,
             MAX_GAS_LIMIT,
@@ -33,7 +33,17 @@ abstract contract OmniERC20Core is ERC20, VizingOmni, IOmniERC20Core {
             signature
         );
 
-        emit2LaunchPad(
+        // emit2LaunchPad(
+        //     0,
+        //     0,
+        //     address(0),
+        //     msg.sender,
+        //     0,
+        //     destinationChainId,
+        //     new bytes(0),
+        //     packedMessage
+        // );
+        LaunchPad.Launch{value: msg.value}(
             0,
             0,
             address(0),
@@ -41,7 +51,7 @@ abstract contract OmniERC20Core is ERC20, VizingOmni, IOmniERC20Core {
             0,
             destinationChainId,
             new bytes(0),
-            packedMessage
+            metadata
         );
         emit TransferToChain(msg.sender, amount, destinationChainId);
     }
@@ -53,7 +63,17 @@ abstract contract OmniERC20Core is ERC20, VizingOmni, IOmniERC20Core {
         bytes calldata packedMessage
     ) external payable override {
         _burn(msg.sender, amount);
-        emit2LaunchPad(
+        // emit2LaunchPad(
+        //     0,
+        //     0,
+        //     address(0),
+        //     msg.sender,
+        //     0,
+        //     destinationChainId,
+        //     additionalParams,
+        //     packedMessage
+        // );
+        LaunchPad.Launch{value: msg.value}(
             0,
             0,
             address(0),
@@ -73,7 +93,7 @@ abstract contract OmniERC20Core is ERC20, VizingOmni, IOmniERC20Core {
     ) external view returns (uint256 gasFee) {
         address targetContract = address(this);
         bytes memory signature = fetchTransferSignature(tokenReceiver, amount);
-        bytes memory packedMessage = PacketMessage(
+        bytes memory packedMessage = _packetMessage(
             bytes1(0x02), // ARBITRARY_ACTIVATE
             targetContract,
             MAX_GAS_LIMIT,
@@ -134,7 +154,7 @@ abstract contract OmniERC20Core is ERC20, VizingOmni, IOmniERC20Core {
         uint64 price,
         bytes calldata signature
     ) external pure override returns (bytes memory message) {
-        message = PacketMessage(
+        message = _packetMessage(
             bytes1(0x02), // ARBITRARY_ACTIVATE
             destinationOmniERC20,
             gasLimit,

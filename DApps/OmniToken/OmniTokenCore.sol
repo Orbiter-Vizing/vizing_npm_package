@@ -61,7 +61,7 @@ abstract contract OmniTokenCore is ERC20, VizingOmni, IOmniTokenCore, Ownable {
         address receiver,
         uint256 amount
     ) public payable virtual {
-        bytes memory message = PacketMessage(
+        bytes memory message = _packetMessage(
             defaultBridgeMode,
             mirrorToken[destChainid],
             maxGasLimit,
@@ -75,7 +75,7 @@ abstract contract OmniTokenCore is ERC20, VizingOmni, IOmniTokenCore, Ownable {
         uint64 destChainid,
         bytes memory message
     ) internal {
-        emit2LaunchPad(
+        LaunchPad.Launch{value: msg.value}(
             uint64(block.timestamp + minArrivalTime),
             uint64(block.timestamp + maxArrivalTime),
             selectedRelayer,
@@ -131,12 +131,25 @@ abstract contract OmniTokenCore is ERC20, VizingOmni, IOmniTokenCore, Ownable {
             amount
         );
 
-        _simpleLaunch(
-            destChainId,
-            mirrorToken[destChainId],
-            gasTip + value,
+        address targetContract = mirrorToken[destChainId];
+
+        bytes memory metadata = _packetMessage(
+            bytes1(0x01), // STANDARD_ACTIVATE
+            targetContract,
             maxGasLimit,
+            _fetchPrice(targetContract, destChainId),
             messageEncode
+        );
+
+        LaunchPad.Launch{value: msg.value}(
+            0,
+            0,
+            address(0),
+            msg.sender,
+            gasTip + value,
+            destChainId,
+            new bytes(0),
+            metadata
         );
     }
 
@@ -155,7 +168,7 @@ abstract contract OmniTokenCore is ERC20, VizingOmni, IOmniTokenCore, Ownable {
             amount
         );
 
-        emit2LaunchPad(
+        LaunchPad.Launch{value: msg.value}(
             uint64(block.timestamp + minArrivalTime),
             uint64(block.timestamp + maxArrivalTime),
             address(0),
@@ -173,7 +186,7 @@ abstract contract OmniTokenCore is ERC20, VizingOmni, IOmniTokenCore, Ownable {
         uint256 amount
     ) internal view returns (bytes memory) {
         return
-            PacketMessage(
+            _packetMessage(
                 defaultBridgeMode,
                 mirrorToken[destChainId],
                 maxGasLimit,
@@ -202,7 +215,7 @@ abstract contract OmniTokenCore is ERC20, VizingOmni, IOmniTokenCore, Ownable {
                 0,
                 destChainid,
                 new bytes(0),
-                PacketMessage(
+                _packetMessage(
                     defaultBridgeMode,
                     mirrorToken[destChainid],
                     maxGasLimit,
@@ -306,7 +319,7 @@ abstract contract OmniTokenCore is ERC20, VizingOmni, IOmniTokenCore, Ownable {
         uint64 srcChainId
     ) internal view returns (bytes memory) {
         return
-            PacketMessage(
+            _packetMessage(
                 defaultBridgeMode,
                 mirrorToken[srcChainId],
                 maxGasLimit,
@@ -353,5 +366,19 @@ abstract contract OmniTokenCore is ERC20, VizingOmni, IOmniTokenCore, Ownable {
 
     function decimals() public pure override returns (uint8) {
         return 18;
+    }
+
+    function exactInput(
+        uint64 destChainid,
+        uint256 amountIn
+    ) external view returns (uint256 amountOut) {
+        return _exactInput(destChainid, amountIn);
+    }
+
+    function exactOutput(
+        uint64 destChainid,
+        uint256 amountOut
+    ) external view returns (uint256 amountIn) {
+        return _exactOutput(destChainid, amountOut);
     }
 }

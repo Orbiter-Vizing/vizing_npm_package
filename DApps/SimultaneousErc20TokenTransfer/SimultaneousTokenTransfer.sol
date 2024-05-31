@@ -72,7 +72,7 @@ contract SimultaneousTokenTransfer is
         );
 
         // additionParams encode
-        bytes memory additionParams = PacketAdditionParams(
+        bytes memory additionParams = _packetAdditionParams(
             ERC20_HANDLER,
             IExpertHook(LaunchPad.expertLaunchHook(ERC20_HANDLER))
                 .getTokenInfoBase(token)
@@ -83,7 +83,7 @@ contract SimultaneousTokenTransfer is
         );
 
         bytes memory encodeMessage = abi.encode(sendMessage);
-        bytes memory message = PacketMessage(
+        bytes memory message = _packetMessage(
             BRIDGE_MODE,
             mirrorMessage[destChainId],
             GAS_LIMIT,
@@ -91,12 +91,32 @@ contract SimultaneousTokenTransfer is
             encodeMessage
         );
 
-        _bridgeTransferHandler(
+        uint256 padValue = isETH ? msg.value - totalAmount : msg.value;
+
+        this.Launch{value: padValue}(
+            msg.sender,
             destChainId,
-            message,
             additionParams,
-            totalAmount,
-            isETH
+            message
+        );
+    }
+
+    function Launch(
+        address sender,
+        uint64 destinationChainId,
+        bytes calldata additionParams,
+        bytes calldata metadata
+    ) public payable {
+        require(msg.sender == address(this), "invalid sender");
+        LaunchPad.Launch{value: msg.value}(
+            0,
+            0,
+            address(0),
+            sender,
+            0,
+            destinationChainId,
+            additionParams,
+            metadata
         );
     }
 
@@ -116,32 +136,6 @@ contract SimultaneousTokenTransfer is
         }
     }
 
-    function _bridgeTransferHandler(
-        uint64 destChainid,
-        bytes memory message,
-        bytes memory additionParams,
-        uint256 totalAmount,
-        bool isETH
-    ) internal {
-        uint256 padValue;
-        if (isETH) {
-            padValue = msg.value - totalAmount;
-        } else {
-            padValue = msg.value;
-        }
-
-        this.emit2LaunchPad{value: padValue}(
-            0,
-            0,
-            selectedRelayer,
-            msg.sender,
-            0,
-            destChainid,
-            additionParams,
-            message
-        );
-    }
-
     function fetchTransferFee(
         uint64 destChainid,
         address token,
@@ -149,7 +143,7 @@ contract SimultaneousTokenTransfer is
         string memory sendMessage
     ) public view returns (uint256) {
         // additionParams encode
-        bytes memory additionParams = PacketAdditionParams(
+        bytes memory additionParams = _packetAdditionParams(
             ERC20_HANDLER,
             IExpertHook(LaunchPad.expertLaunchHook(ERC20_HANDLER))
                 .getTokenInfoBase(token)
@@ -159,7 +153,7 @@ contract SimultaneousTokenTransfer is
             amount
         );
         bytes memory encodeMessage = abi.encode(sendMessage);
-        bytes memory message = PacketMessage(
+        bytes memory message = _packetMessage(
             BRIDGE_MODE,
             mirrorMessage[destChainid],
             GAS_LIMIT,

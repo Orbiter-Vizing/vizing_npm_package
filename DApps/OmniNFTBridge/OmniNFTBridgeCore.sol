@@ -2,18 +2,22 @@
 pragma solidity ^0.8.23;
 
 import {VizingOmni} from "@vizing/contracts/VizingOmni.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC721Metadata} from "@openzeppelin/contracts/token/ERC721/extensions/IERC721Metadata.sol";
-import {IMessageStruct} from "../../interface/IMessageStruct.sol";
+import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import {IOmniNFTBridge} from "./interface/IOmniNFTBridge.sol";
+import {ICompanionMessage} from "./interface/ICompanionMessage.sol";
+import {MetaUtils} from "./library/MetaUtils.sol";
 
-contract OmniNFTBridgeCore is VizingOmni, Ownable, IOmniNFTBridge {
+contract OmniNFTBridgeCore is VizingOmni, IOmniNFTBridge, IERC721Receiver {
     error NotImplemented();
+    error NotBridgeMessage();
+    error DataLengthError();
+    error FailedCall();
 
-    uint24 public immutable WRAPPED_TOKEN_GAS_LIMIT;
+    using MetaUtils for address;
 
-    uint24 public immutable MINT_TOKEN_GAS_LIMIT;
+    uint24 public immutable DEFAULT_GASLIMIT;
 
     bytes1 private constant BRIDGE_SEND_MODE = 0x01;
 
@@ -29,17 +33,14 @@ contract OmniNFTBridgeCore is VizingOmni, Ownable, IOmniNFTBridge {
 
     mapping(uint64 => address) public mirrorBridge;
 
-    // wrapped history
-    mapping(bytes32 => bool) public wrappedHistory;
+    mapping(uint64 => address) public mirrorGovernor;
 
     constructor(
-        address _owner,
         address _vizingPad,
         uint64 _deployChainId
-    ) VizingOmni(_vizingPad) Ownable(_owner) {
-        WRAPPED_TOKEN_GAS_LIMIT = 1500000;
-        MINT_TOKEN_GAS_LIMIT = 65000;
+    ) VizingOmni(_vizingPad) {
         currentChainId = _deployChainId;
+        DEFAULT_GASLIMIT = 2000000;
     }
 
     /*
@@ -48,62 +49,208 @@ contract OmniNFTBridgeCore is VizingOmni, Ownable, IOmniNFTBridge {
         /// @param tokenReceiver The address of the receiver on the destination chain
         /// @param tokenId The id of the token to be sent
         /// @param token The address of the token to be sent
+        /// @param baseURI The base uri of the token, could be empty
+        /// @param companionMessage The additional message to be sent
     */
     function bridgeAsset(
         uint64 destinationChainId,
         address tokenReceiver,
         uint256 tokenId,
+        address token,
+        string calldata baseURI,
+        bytes calldata companionMessage
+    ) public payable virtual override {
+        {
+            _bridgeAssetHandlingStrategy(
+                destinationChainId,
+                tokenReceiver,
+                tokenId,
+                token
+            );
+        }
+
+        bytes memory metadata;
+        {
+            metadata = fetchBridgeAssetMessage(
+                destinationChainId,
+                tokenReceiver,
+                tokenId,
+                token,
+                baseURI,
+                companionMessage
+            );
+        }
+        this.Launch{value: msg.value}(msg.sender, destinationChainId, metadata);
+    }
+
+    function Launch(
+        address sender,
+        uint64 destinationChainId,
+        bytes calldata metadata
+    ) public payable {
+        require(msg.sender == address(this), "invalid sender");
+        LaunchPad.Launch{value: msg.value}(
+            0,
+            0,
+            address(0),
+            sender,
+            0,
+            destinationChainId,
+            new bytes(0),
+            metadata
+        );
+    }
+
+    function _bridgeAssetHandlingStrategy(
+        uint64 destinationChainId,
+        address tokenReceiver,
+        uint256 tokenId,
         address token
-    ) public payable override {
+    ) internal {
         _bridgeSendCallback(destinationChainId, tokenReceiver, tokenId, token);
+        TokenInformation memory tokenInfo = wrappedTokens[token];
+        // check if token is wrapped-token
+        if (tokenInfo.originTokenAddress != address(0)) {
+            // The token is a wrapped token from another network
+            _storeAsset(token, tokenId);
+        } else {
+            IERC721(token).safeTransferFrom(msg.sender, address(this), tokenId);
+        }
+    }
+
+    function fetchBridgeAssetMessage(
+        uint64 destinationChainId,
+        address tokenReceiver,
+        uint256 tokenId,
+        address token,
+        string calldata baseURI,
+        bytes calldata companionMessage
+    ) public view returns (bytes memory encodedMessage) {
         address originTokenAddress;
         uint64 originChainId;
-        bytes memory metadata;
-        uint24 gasLimitInDestChain = MINT_TOKEN_GAS_LIMIT;
+        {
+            TokenInformation memory tokenInfo = wrappedTokens[token];
+
+            // check if token is wrapped-token
+            if (tokenInfo.originTokenAddress != address(0)) {
+                // The token is a wrapped token from another network
+                originTokenAddress = tokenInfo.originTokenAddress;
+                originChainId = tokenInfo.originChainId;
+            } else {
+                originTokenAddress = token;
+                originChainId = currentChainId;
+            }
+        }
+
+        bytes memory metadata = _encodeMetadata(
+            BRIDGE_SEND_MODE,
+            originTokenAddress,
+            originChainId,
+            tokenReceiver,
+            tokenId,
+            token,
+            baseURI,
+            companionMessage
+        );
+        address targetContract = mirrorBridge[destinationChainId];
+        uint64 price = _fetchPrice(targetContract, destinationChainId);
+        encodedMessage = _packetMessage(
+            BRIDGE_SEND_MODE, // STANDARD_ACTIVATE
+            targetContract,
+            DEFAULT_GASLIMIT,
+            price,
+            metadata
+        );
+    }
+
+    function fetchBridgeAssetMessage(
+        uint64 destinationChainId,
+        address tokenReceiver,
+        uint256 tokenId,
+        address token,
+        bytes calldata companionMessage
+    ) public view returns (bytes memory encodedMessage) {
+        address originTokenAddress;
+        uint64 originChainId;
         TokenInformation memory tokenInfo = wrappedTokens[token];
 
         // check if token is wrapped-token
         if (tokenInfo.originTokenAddress != address(0)) {
             // The token is a wrapped token from another network
-
-            // Burn tokens
-            _storeAsset(token, msg.sender, tokenId);
-
             originTokenAddress = tokenInfo.originTokenAddress;
             originChainId = tokenInfo.originChainId;
         } else {
-            IERC721(token).transferFrom(msg.sender, address(this), tokenId);
-
             originTokenAddress = token;
             originChainId = currentChainId;
         }
-        bytes32 wrappedHistoryHash = keccak256(
-            abi.encode(destinationChainId, token)
-        );
 
-        if (wrappedHistory[wrappedHistoryHash] == false) {
-            gasLimitInDestChain = WRAPPED_TOKEN_GAS_LIMIT;
-            wrappedHistory[wrappedHistoryHash] = true;
-        }
-
-        // Encode metadata
-        metadata = abi.encode(
+        bytes memory metadata = _encodeMetadata(
+            BRIDGE_SEND_MODE,
             originTokenAddress,
             originChainId,
             tokenReceiver,
             tokenId,
-            _safeName(token),
-            _safeSymbol(token),
-            _safeTokenURI(token, tokenId)
+            token,
+            "",
+            companionMessage
         );
-
-        _simpleLaunch(
-            destinationChainId,
-            mirrorBridge[destinationChainId],
-            0,
-            gasLimitInDestChain,
+        address targetContract = mirrorBridge[destinationChainId];
+        uint64 price = _fetchPrice(targetContract, destinationChainId);
+        encodedMessage = _packetMessage(
+            BRIDGE_SEND_MODE, // STANDARD_ACTIVATE
+            targetContract,
+            DEFAULT_GASLIMIT,
+            price,
             metadata
         );
+    }
+
+    /*
+        /// @notice Function to estimate the fee of sending tokens to another chain
+        /// @param destinationChainId The destination chain id
+        /// @param destinationAddress The address of the receiver on the destination chain
+        /// @param tokenReceiver The address of the receiver on the destination chain
+        /// @param tokenId The id of the token to be sent
+        /// @param token The address of the token to be sent
+        /// @param companionMessage The additional message to be sent
+        /// @return The fee of sending tokens to another chain
+        /// @return The encoded message
+    */
+    function fetchBridgeAssetDetails(
+        uint64 destinationChainId,
+        address tokenReceiver,
+        uint256 tokenId,
+        address token,
+        bytes calldata companionMessage
+    ) public view returns (uint256 gasFee, bytes memory encodedMessage) {
+        encodedMessage = fetchBridgeAssetMessage(
+            destinationChainId,
+            tokenReceiver,
+            tokenId,
+            token,
+            companionMessage
+        );
+
+        gasFee = _estimateVizingGasFee(
+            0,
+            destinationChainId,
+            new bytes(0),
+            encodedMessage
+        );
+    }
+
+    function predictNFTAddress(
+        uint64 destinationChainId,
+        uint64 originChainId,
+        address originTokenAddress,
+        string memory name,
+        string memory symbol
+    ) external view virtual override returns (address) {
+        (destinationChainId, originChainId, name, symbol);
+        if (originTokenAddress != address(0)) {
+            revert NotImplemented();
+        }
+        return address(0);
     }
 
     /*
@@ -112,41 +259,74 @@ contract OmniNFTBridgeCore is VizingOmni, Ownable, IOmniNFTBridge {
         /// @param message The message from the source chain
     */
     function _receiveMessage(
-        uint64 /*srcChainId*/,
-        uint256 /*srcContract*/,
+        uint64 srcChainId,
+        uint256 srcContract,
         bytes calldata message
     ) internal virtual override {
         bytes1 mode = bytes1(bytes32(message[0:32]));
         if (mode == BRIDGE_SEND_MODE) {
-            (
-                address originTokenAddress,
-                uint64 originChainId,
-                address tokenReceiver,
-                uint256 tokenId,
-                string memory name,
-                string memory symbol,
-                string memory tokenURI
-            ) = abi.decode(
-                    message,
-                    (address, uint64, address, uint256, string, string, string)
-                );
+            if (mirrorBridge[srcChainId] != address(uint160(srcContract))) {
+                revert NotBridgeMessage();
+            }
+            address _tokenReceiver;
+            bytes memory _companionMessage;
+            {
+                (
+                    ,
+                    address originTokenAddress,
+                    uint64 originChainId,
+                    address tokenReceiver,
+                    uint256 tokenId,
+                    string memory name,
+                    string memory symbol,
+                    string memory baseURI,
+                    bytes memory companionMessage
+                ) = abi.decode(
+                        message,
+                        (
+                            bytes1,
+                            address,
+                            uint64,
+                            address,
+                            uint256,
+                            string,
+                            string,
+                            string,
+                            bytes
+                        )
+                    );
 
-            _claimAssetHandler(
-                originChainId,
-                originTokenAddress,
-                tokenReceiver,
-                tokenId,
-                name,
-                symbol,
-                tokenURI
-            );
+                _claimAssetHandler(
+                    originChainId,
+                    originTokenAddress,
+                    tokenReceiver,
+                    tokenId,
+                    name,
+                    symbol,
+                    baseURI
+                );
+                _tokenReceiver = tokenReceiver;
+                _companionMessage = companionMessage;
+            }
+
+            if (_companionMessage.length > 0) {
+                bool success = ICompanionMessage(_tokenReceiver)
+                    .handlerBridgeCompanionMessage(_companionMessage);
+                if (!success) {
+                    revert FailedCall();
+                }
+            }
         } else if (mode == UNLOCK_MODE) {
+            if (mirrorGovernor[srcChainId] != address(uint160(srcContract))) {
+                revert NotBridgeMessage();
+            }
             (
+                ,
                 address originTokenAddress,
                 address tokenReceiver,
                 uint256 tokenId
-            ) = abi.decode(message, (address, address, uint256));
-            IERC721(originTokenAddress).transferFrom(
+            ) = abi.decode(message, (bytes1, address, address, uint256));
+            IERC721(originTokenAddress).safeTransferFrom(
                 address(this),
                 tokenReceiver,
                 tokenId
@@ -161,12 +341,12 @@ contract OmniNFTBridgeCore is VizingOmni, Ownable, IOmniNFTBridge {
         uint256 tokenId,
         string memory name,
         string memory symbol,
-        string memory tokenURI
+        string memory baseURI
     ) internal returns (address wrappedToken) {
         // Transfer tokens
         if (originChainId == currentChainId) {
             // The token is an ERC20 from this network
-            IERC721(originTokenAddress).transferFrom(
+            IERC721(originTokenAddress).safeTransferFrom(
                 address(this),
                 tokenReceiver,
                 tokenId
@@ -182,10 +362,15 @@ contract OmniNFTBridgeCore is VizingOmni, Ownable, IOmniNFTBridge {
             if (wrappedToken == address(0)) {
                 // Create a new wrapped erc20 using create2
 
-                wrappedToken = _deployContract(tokenInfoHash, name, symbol);
+                wrappedToken = _deployContract(
+                    tokenInfoHash,
+                    name,
+                    symbol,
+                    baseURI
+                );
 
                 // Mint tokens for the destination address
-                _claimAsset(wrappedToken, tokenReceiver, tokenId, tokenURI);
+                _claimAsset(wrappedToken, tokenReceiver, tokenId);
 
                 // Create mappings
                 tokenInfoToWrappedToken[tokenInfoHash] = wrappedToken;
@@ -195,87 +380,42 @@ contract OmniNFTBridgeCore is VizingOmni, Ownable, IOmniNFTBridge {
                     originChainId,
                     originTokenAddress
                 );
-
                 emit NewWrappedToken(
                     originChainId,
                     originTokenAddress,
                     wrappedToken,
-                    tokenId,
                     name,
                     symbol,
-                    tokenURI
+                    baseURI
                 );
             } else {
                 // Use the existing wrapped erc20
-                _claimAsset(wrappedToken, tokenReceiver, tokenId, tokenURI);
+                _claimAsset(wrappedToken, tokenReceiver, tokenId);
             }
         }
     }
 
-    /*
-        /// @notice Function to estimate the fee of sending tokens to another chain
-        /// @param destinationChainId The destination chain id
-        /// @param destinationAddress The address of the receiver on the destination chain
-        /// @param tokenReceiver The address of the receiver on the destination chain
-        /// @param tokenId The id of the token to be sent
-        /// @param token The address of the token to be sent
-        /// @return The fee of sending tokens to another chain
-    */
-    function fetchBridgeAssetDetails(
-        uint64 destinationChainId,
+    function _encodeMetadata(
+        bytes1 mode,
+        address originTokenAddress,
+        uint64 originChainId,
         address tokenReceiver,
         uint256 tokenId,
-        address token
-    ) external view returns (uint256 gasFee) {
-        // address originTokenAddress;
-        // uint64 originChainId;
-        // bytes memory metadata;
-        // uint24 gasLimitInDestChain = MINT_TOKEN_GAS_LIMIT;
-        // TokenInformation memory tokenInfo = wrappedTokens[token];
-        // // check if token is wrapped-token
-        // if (tokenInfo.originTokenAddress != address(0)) {
-        //     // The token is a wrapped token from another network
-        //     originTokenAddress = tokenInfo.originTokenAddress;
-        //     originChainId = tokenInfo.originChainId;
-        // } else {
-        //     originTokenAddress = token;
-        //     originChainId = currentChainId;
-        // }
-        // bytes32 wrappedHistoryHash = keccak256(
-        //     abi.encode(destinationChainId, token)
-        // );
-        // if (wrappedHistory[wrappedHistoryHash] == false) {
-        //     gasLimitInDestChain = WRAPPED_TOKEN_GAS_LIMIT;
-        // }
-        // // string memory tokenName = _safeName(token);
-        // // string memory tokenSymbol = _safeSymbol(token);
-        // string memory tokenURI = _safeTokenURI(token, tokenId);
-        // // Encode metadata
-        // metadata = abi.encode(
-        //     originTokenAddress,
-        //     originChainId,
-        //     tokenReceiver,
-        //     tokenId,
-        //     _safeName(token),
-        //     _safeSymbol(token),
-        //     tokenURI
-        // );
-        // address targetContract = mirrorBridge[destinationChainId];
-        // uint64 price = _fetchPrice(targetContract, destinationChainId);
-        // bytes memory signature = _fetchSignature(BRIDGE_SEND_MODE, metadata);
-        // bytes memory packedMessage = PacketMessage(
-        //     bytes1(0x02), // ARBITRARY_ACTIVATE
-        //     targetContract,
-        //     gasLimitInDestChain,
-        //     price,
-        //     signature
-        // );
-        // gasFee = _estimateVizingGasFee(
-        //     0,
-        //     destinationChainId,
-        //     new bytes(0),
-        //     packedMessage
-        // );
+        address token,
+        string memory baseURI,
+        bytes calldata companionMessage
+    ) public view returns (bytes memory encodedMessage) {
+        encodedMessage = abi.encode(
+            mode,
+            originTokenAddress,
+            originChainId,
+            tokenReceiver,
+            tokenId,
+            token._safeName(),
+            token._safeSymbol(),
+            baseURI,
+            companionMessage
+        );
     }
 
     /*
@@ -324,9 +464,10 @@ contract OmniNFTBridgeCore is VizingOmni, Ownable, IOmniNFTBridge {
     function _deployContract(
         bytes32 salt,
         string memory name,
-        string memory symbol
+        string memory symbol,
+        string memory baseURI
     ) internal virtual returns (address) {
-        (salt, name, symbol);
+        (salt, name, symbol, baseURI);
         if (salt != 0) {
             revert NotImplemented();
         }
@@ -343,10 +484,9 @@ contract OmniNFTBridgeCore is VizingOmni, Ownable, IOmniNFTBridge {
     function _claimAsset(
         address token,
         address tokenReceiver,
-        uint256 tokenId,
-        string memory tokenURI
+        uint256 tokenId
     ) internal virtual {
-        (token, tokenReceiver, tokenId, tokenURI);
+        (token, tokenReceiver, tokenId);
         if (tokenReceiver != address(0)) {
             revert NotImplemented();
         }
@@ -358,14 +498,23 @@ contract OmniNFTBridgeCore is VizingOmni, Ownable, IOmniNFTBridge {
         /// @param tokenReceiver The address of the receiver
         /// @param amount The amount of tokens to be stored
     */
-    function _storeAsset(
-        address token,
-        address tokenReceiver,
-        uint256 tokenId
-    ) internal virtual {
-        (token, tokenReceiver, tokenId);
-        if (tokenReceiver != address(0)) {
+    function _storeAsset(address token, uint256 tokenId) internal virtual {
+        (token, tokenId);
+        if (token != address(0)) {
             revert NotImplemented();
+        }
+    }
+
+    function _setMirrorGovernors(
+        uint64[] calldata chainIds,
+        address[] calldata governors
+    ) internal {
+        if (chainIds.length != governors.length) {
+            revert DataLengthError();
+        }
+
+        for (uint256 i = 0; i < chainIds.length; i++) {
+            mirrorGovernor[chainIds[i]] = governors[i];
         }
     }
 
@@ -378,77 +527,21 @@ contract OmniNFTBridgeCore is VizingOmni, Ownable, IOmniNFTBridge {
         uint64[] calldata chainIds,
         address[] calldata bridges
     ) internal {
-        require(chainIds.length == bridges.length, "Invalid input length");
+        if (chainIds.length != bridges.length) {
+            revert DataLengthError();
+        }
         for (uint256 i = 0; i < chainIds.length; i++) {
             mirrorBridge[chainIds[i]] = bridges[i];
         }
     }
 
-    /**
-     * @notice Provides a safe ERC721.symbol version which returns 'NO_SYMBOL' as fallback string
-     * @param token The address of the ERC-721 token contract
-     */
-    function _safeSymbol(address token) internal view returns (string memory) {
-        (bool success, bytes memory data) = address(token).staticcall(
-            abi.encodeCall(IERC721Metadata.symbol, ())
-        );
-        return success ? _returnDataToString(data) : "NO_SYMBOL";
-    }
-
-    /**
-     * @notice  Provides a safe ERC721.name version which returns 'NO_NAME' as fallback string.
-     * @param token The address of the ERC-721 token contract.
-     */
-    function _safeName(address token) internal view returns (string memory) {
-        (bool success, bytes memory data) = address(token).staticcall(
-            abi.encodeCall(IERC721Metadata.name, ())
-        );
-        return success ? _returnDataToString(data) : "NO_NAME";
-    }
-
-    /**
-     * @notice Function to get the token URI of an ERC721 token
-     * @param token The address of the ERC-721 token contract
-     */
-    function _safeTokenURI(
-        address token,
-        uint256 tokenId
-    ) internal view returns (string memory) {
-        (bool success, bytes memory data) = address(token).staticcall(
-            abi.encodeCall(IERC721Metadata.tokenURI, (tokenId))
-        );
-        return success ? _returnDataToString(data) : "NO_TOKEN_URI";
-    }
-
-    /**
-     * @notice Function to convert returned data to string
-     * returns 'NOT_VALID_ENCODING' as fallback value.
-     * @param data returned data
-     */
-    function _returnDataToString(
-        bytes memory data
-    ) internal pure returns (string memory) {
-        if (data.length >= 64) {
-            return abi.decode(data, (string));
-        } else if (data.length == 32) {
-            // Since the strings on bytes32 are encoded left-right, check the first zero in the data
-            uint256 nonZeroBytes;
-            while (nonZeroBytes < 32 && data[nonZeroBytes] != 0) {
-                nonZeroBytes++;
-            }
-
-            // If the first one is 0, we do not handle the encoding
-            if (nonZeroBytes == 0) {
-                return "NOT_VALID_ENCODING";
-            }
-            // Create a byte array with nonZeroBytes length
-            bytes memory bytesArray = new bytes(nonZeroBytes);
-            for (uint256 i = 0; i < nonZeroBytes; i++) {
-                bytesArray[i] = data[i];
-            }
-            return string(bytesArray);
-        } else {
-            return "NOT_VALID_ENCODING";
-        }
+    function onERC721Received(
+        address operator,
+        address from,
+        uint256 tokenId,
+        bytes calldata data
+    ) public virtual override returns (bytes4) {
+        (operator, from, tokenId, data);
+        return IERC721Receiver.onERC721Received.selector;
     }
 }
