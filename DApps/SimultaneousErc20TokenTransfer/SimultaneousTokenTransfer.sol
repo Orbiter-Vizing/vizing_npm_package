@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.23;
 
-// import {VizingOmniUpgradeable} from "@vizing/contracts/VizingOmni-upgradeable.sol";
-import {VizingOmniUpgradeable} from "../../VizingOmni-upgradeable.sol";
-import {VizingERC20HandlerUpgradeable} from "../../extensions/VizingERC20Handler-upgradeable.sol";
+import {VizingOmniUpgradeable} from "@vizing/contracts/VizingOmni-upgradeable.sol";
+import {VizingERC20HandlerUpgradeable} from "@vizing/contracts/extensions/VizingERC20Handler-upgradeable.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-
-import "hardhat/console.sol"; // just for debugging
 
 contract SimultaneousTokenTransfer is
     Ownable,
