@@ -19,6 +19,9 @@ abstract contract OmniTokenBridgeCore is IOminiTokenBridge, VizingOmni {
     error NotImplemented();
     error DataLengthError();
     error InvalidAddress();
+    error FailedCall();
+    error NotBridgeMessage();
+    error PermitionDenied();
 
     using SafeERC20 for IERC20;
     using Erc20Utils for address;
@@ -47,7 +50,14 @@ abstract contract OmniTokenBridgeCore is IOminiTokenBridge, VizingOmni {
 
     mapping(uint64 => address) public mirrorBridge;
 
-    mapping(uint64 => address) public mirrorGovernor;
+    mapping(address => bool) public governors;
+
+    modifier onlyGovernor() {
+        if (governors[msg.sender] == false) {
+            revert PermitionDenied();
+        }
+        _;
+    }
 
     constructor(
         address _vizingPad,
@@ -627,16 +637,16 @@ abstract contract OmniTokenBridgeCore is IOminiTokenBridge, VizingOmni {
         }
     }
 
-    function _setMirrorGovernors(
-        uint64[] calldata chainIds,
-        address[] calldata governors
+    function _setGovernors(
+        address[] memory _governors,
+        bool[] memory _states
     ) internal {
-        if (chainIds.length != governors.length) {
+        if (_states.length != _governors.length) {
             revert DataLengthError();
         }
 
-        for (uint256 i = 0; i < chainIds.length; i++) {
-            mirrorGovernor[chainIds[i]] = governors[i];
+        for (uint256 i = 0; i < _governors.length; i++) {
+            governors[_governors[i]] = _states[i];
         }
     }
 

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.23;
-import {IColor} from "../VizingTokenBridge.sol";
+import {ICompanionMessage} from "../interface/ICompanionMessage.sol";
 import {IOminiTokenBridge} from "../interface/IOminiTokenBridge.sol";
 
-contract Converter is IColor {
+contract Converter is ICompanionMessage {
     function bridgeConvertTokenReceiver(
         bytes calldata
     ) external pure returns (bool) {

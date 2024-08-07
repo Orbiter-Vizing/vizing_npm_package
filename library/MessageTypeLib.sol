@@ -15,9 +15,8 @@ library MessageTypeLib {
      */
     // Single-Send mode
     bytes1 constant SINGLE_SEND = 0x01;
-    bytes1 constant ERC20_HANDLER = 0x03;
-    bytes1 constant MULTI_MANY_2_ONE = 0x04;
-    bytes1 constant MULTI_UNIVERSAL = 0x05;
+    bytes1 constant MULTI_UNIVERSAL = 0x03;
+    bytes1 constant ERC20_HANDLER = 0x04;
 
     bytes1 constant MAX_MODE = 0xFF;
 

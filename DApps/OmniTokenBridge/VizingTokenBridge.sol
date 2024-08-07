@@ -48,26 +48,36 @@ import {OmniTokenBridgeCore} from "./OmniTokenBridgeCore.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ICompanionMessage} from "./interface/ICompanionMessage.sol";
 import {TokenWrapped} from "./TokenWrapped.sol";
 
-interface IColor {
-    function bridgeConvertTokenReceiver(
-        bytes calldata companionMessage
-    ) external returns (bool);
-}
-
 contract VizingTokenBridge is Ownable, OmniTokenBridgeCore {
-    error FailedCall();
-    error NotBridgeMessage();
-
     using SafeERC20 for IERC20;
 
     constructor(
         address _owner,
+        address[] memory _governors,
         address _vizingPad,
         uint64 _currentChainId
     ) Ownable(_owner) OmniTokenBridgeCore(_vizingPad, _currentChainId) {
+        if (
+            _governors.length == 0 ||
+            _owner == address(0) ||
+            _vizingPad == address(0)
+        ) {
+            revert InvalidAddress();
+        }
+
         DEFAULT_GASLIMIT = 2000000;
+        bool[] memory states = new bool[](_governors.length + 1);
+        address[] memory newGovernors = new address[](_governors.length + 1);
+        for (uint256 i = 0; i < _governors.length; i++) {
+            states[i] = true;
+            newGovernors[i] = _governors[i];
+        }
+        states[_governors.length] = true;
+        newGovernors[_governors.length] = _owner;
+        _setGovernors(newGovernors, states);
     }
 
     /*
@@ -141,15 +151,14 @@ contract VizingTokenBridge is Ownable, OmniTokenBridgeCore {
             );
 
             if (companionMessage.length != 0) {
-                bool success = IColor(tokenReceiver).bridgeConvertTokenReceiver(
-                    companionMessage
-                );
+                bool success = ICompanionMessage(tokenReceiver)
+                    .bridgeConvertTokenReceiver(companionMessage);
                 if (!success) {
                     revert FailedCall();
                 }
             }
         } else if (mode == UNLOCK_MODE) {
-            if (mirrorGovernor[srcChainId] != address(uint160(srcContract))) {
+            if (governors[address(uint160(srcContract))] == false) {
                 revert NotBridgeMessage();
             }
             (
@@ -246,18 +255,18 @@ contract VizingTokenBridge is Ownable, OmniTokenBridgeCore {
     function setMirrorBridges(
         uint64[] calldata chainIds,
         address[] calldata bridges
-    ) external onlyOwner {
+    ) external onlyGovernor {
         _setMirrorBridges(chainIds, bridges);
     }
 
-    function setMirrorGovernors(
-        uint64[] calldata chainIds,
-        address[] calldata governors
+    function setGovernors(
+        address[] calldata _governors,
+        bool[] calldata _states
     ) external onlyOwner {
-        _setMirrorGovernors(chainIds, governors);
+        _setGovernors(_governors, _states);
     }
 
-    function modifyBridgeGasLimit(uint24 _newGasLimit) external onlyOwner {
+    function modifyBridgeGasLimit(uint24 _newGasLimit) external onlyGovernor {
         _modifyGasLimit(_newGasLimit);
     }
 }

@@ -25,4 +25,9 @@ library Errors {
     error ValidatorNotMatched();
     error InsufficientFunds();
     error InvalidSignature();
+
+    // expert mode return
+    error ExpertModeError();
+    error AllDone();
+    error ClearNativeToken();
 }

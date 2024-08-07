@@ -87,24 +87,6 @@ abstract contract MessageEmitter is IMessageEmitter {
     }
 
     /*
-        /// @notice use this function to send the ERC20 token to the destination chain
-        /// @param tokenSymbol The token symbol
-        /// @param sender The sender address for the message
-        /// @param receiver The receiver address for the message
-        /// @param amount The amount of tokens to be sent
-        /// see https://docs.vizing.com/docs/DApp/Omni-ERC20-Transfer
-    */
-    function _packetAdditionParams(
-        bytes1 mode,
-        bytes1 tokenSymbol,
-        address sender,
-        address receiver,
-        uint256 amount
-    ) internal pure returns (bytes memory) {
-        return abi.encodePacked(mode, tokenSymbol, sender, receiver, amount);
-    }
-
-    /*
         /// @notice Calculate the amount of native tokens obtained on the target chain
         /// @param value The value we send to vizing on the source chain
     */

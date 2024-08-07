@@ -1,6 +1,6 @@
 {
   "name": "@vizing/contracts",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "sdk of vizing",
   "main": "index.js",
   "scripts": {
